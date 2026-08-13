@@ -2,6 +2,18 @@
 
 All notable changes to traceact-browser are documented here.
 
+## [1.1.0] — 2026-08-13
+
+### Added
+
+- **Project-scoped addressing**: `GET /snapshot?project=host:port` and `POST /focus` with `{"project": "host:port"}` target the tab most recently seen producing traces for that app, resolved across browsers — no tab, window, or client ids needed. The relay learns the mapping from ingested records; unknown projects answer 404 with the list of known ones, and `/health` now reports every project seen with its age.
+- **Python client helpers**: `from traceact_browser import snapshot, focus, health` — thin wrappers over the relay's endpoints that find the running relay automatically, for app launchers and agents.
+- **TraceAct logo** on the extension icon, popup, and settings-page favicon.
+
+### Changed
+
+- The settings page greys out every capture-dependent control (allowlist, capture-all, redaction, bodies) while "Capture is on" is unticked, so what's inert reads as inert.
+
 ## [1.0.0] — 2026-08-13
 
 First release: a Chrome/Brave extension plus a local, zero-dependency Python relay that capture what happens in the browser and write it as traceact-format JSONL to one file on your machine.

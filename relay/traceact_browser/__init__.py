@@ -8,8 +8,10 @@ It also carries commands the other way: DOM snapshots on request, and
 click-to-focus from the viewer back to the owning tab.
 """
 
+from traceact_browser.client import RelayNotRunning, focus, health, snapshot
 from traceact_browser.server import RelayServer, find_running_relay
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
-__all__ = ["RelayServer", "find_running_relay", "__version__"]
+__all__ = ["RelayServer", "find_running_relay", "snapshot", "focus", "health",
+           "RelayNotRunning", "__version__"]

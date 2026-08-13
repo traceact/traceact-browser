@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "traceact-browser"
-version = "1.0.0"
+version = "1.1.0"
 description = "Local relay for the traceact-browser extension: receives browser traces, writes traceact JSONL, serves snapshots and click-to-focus."
 readme = "README.md"
 requires-python = ">=3.9"

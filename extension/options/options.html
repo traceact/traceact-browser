@@ -3,10 +3,13 @@
 <head>
 <meta charset="utf-8">
 <title>traceact-browser settings</title>
+<link rel="icon" type="image/svg+xml" href="../icons/favicon.svg">
 <style>
   body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto;
          line-height: 1.5; padding: 0 1rem; font-size: 14px; }
-  h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 1.6em; }
+  h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
+  h1 img { width: 28px; height: 28px; }
+  h2 { font-size: 16px; margin-top: 1.6em; }
   label { display: block; margin: 0.6em 0; }
   input[type=text], input[type=number] { font: inherit; padding: 6px; border: 1px solid #999;
          border-radius: 6px; }
@@ -20,10 +23,13 @@
 </style>
 </head>
 <body>
-<h1>traceact-browser settings</h1>
+<h1><img src="../icons/logo.svg" alt="">traceact-browser settings</h1>
 <p>What to capture, from which sites, and how much to redact. Every change
 saves the moment you make it. <span id="saved" class="saved">Saved.</span></p>
 
+<label><input type="checkbox" id="enabled"> <b>Capture is on</b></label>
+
+<div class="capture-dependent">
 <h2>Which sites get tracked</h2>
 <p class="muted">Type a domain the way you'd say it: <code>myapp.com</code> or
 <code>127.0.0.1:3000</code>. No https:// needed. A bare domain covers its
@@ -35,8 +41,9 @@ subdomains and every port; adding a port pins it to that one app.</p>
 </form>
 <label><input type="checkbox" id="capture-all">
   Capture all sites, ignoring the list above (the permissive mode)</label>
-<label><input type="checkbox" id="enabled"> Capture is on</label>
+</div>
 
+<div class="capture-dependent">
 <h2>Redaction</h2>
 <label><input type="checkbox" id="redact-inputs">
   Record only the length of what's typed into fields, never the text itself</label>
@@ -49,6 +56,7 @@ subdomains and every port; adding a port pins it to that one app.</p>
 </label>
 <p class="muted">Credential-shaped values (tokens, keys, JWTs, password fields)
 are masked before anything reaches disk, in every mode.</p>
+</div>
 
 <h2>This browser</h2>
 <label>Label shown in traces (tells Chrome and Brave apart):

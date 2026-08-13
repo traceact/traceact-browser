@@ -12,6 +12,21 @@ async function save() {
   setTimeout(() => { saved.style.visibility = 'hidden'; }, 1200);
 }
 
+// Everything that only means something while capture runs greys out when
+// capture is off; the master switch itself and this-browser settings stay live.
+const CAPTURE_DEPENDENT = ['capture-all', 'redact-inputs', 'bodies', 'add-input'];
+
+function applyEnabledState() {
+  const off = !settings.enabled;
+  for (const id of CAPTURE_DEPENDENT) el(id).disabled = off;
+  for (const button of document.querySelectorAll('#allowlist button, #add-form button')) {
+    button.disabled = off;
+  }
+  for (const section of document.querySelectorAll('.capture-dependent')) {
+    section.style.opacity = off ? '0.45' : '';
+  }
+}
+
 function renderAllowlist() {
   const list = el('allowlist');
   list.textContent = '';
@@ -35,6 +50,7 @@ function renderAllowlist() {
     li.append(remove, span);
     list.appendChild(li);
   }
+  applyEnabledState();
 }
 
 function renderAll() {
@@ -45,6 +61,7 @@ function renderAll() {
   el('bodies').value = settings.captureBodies;
   el('label').value = settings.browserLabel;
   el('relay-port').value = settings.relayPort;
+  applyEnabledState();
 }
 
 el('add-form').addEventListener('submit', async (e) => {
@@ -67,6 +84,7 @@ const bind = (id, key, prop = 'checked') => {
     let value = el(id)[prop];
     if (id === 'relay-port') value = Math.max(0, parseInt(value, 10) || 0);
     settings = { ...settings, [key]: value };
+    applyEnabledState();
     await save();
   });
 };

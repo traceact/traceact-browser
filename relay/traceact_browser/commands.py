@@ -32,8 +32,41 @@ class CommandHub:
     def __init__(self) -> None:
         self._lock = threading.Condition()
         self._clients: Dict[str, Client] = {}
+        self._projects: Dict[str, Dict[str, Any]] = {}
         self._results: Dict[str, Any] = {}
         self._result_events: Dict[str, threading.Event] = {}
+
+    def note_records(self, records: List[Dict[str, Any]]) -> None:
+        """Learn project → tab targets from ingested records.
+
+        Lets callers address a tab by the one thing an app already knows,
+        its own host:port, instead of tab and client ids. Most recent
+        record per project wins, so the target follows the user's activity.
+        """
+        with self._lock:
+            for rec in records:
+                project = rec.get("project")
+                meta = rec.get("meta") or {}
+                if (not project or project == "unknown"
+                        or not isinstance(meta, dict) or meta.get("tab_id") is None):
+                    continue
+                self._projects[project] = {
+                    "client_id": meta.get("client_id"),
+                    "tab_id": meta.get("tab_id"),
+                    "window_id": meta.get("window_id"),
+                    "seen": time.monotonic(),
+                }
+
+    def project_target(self, project: str) -> Optional[Dict[str, Any]]:
+        """The most recently seen tab for a project, or None."""
+        with self._lock:
+            return dict(self._projects[project]) if project in self._projects else None
+
+    def projects(self) -> Dict[str, float]:
+        """Known projects and how many seconds ago each was last seen."""
+        now = time.monotonic()
+        with self._lock:
+            return {p: round(now - t["seen"], 1) for p, t in self._projects.items()}
 
     def touch(self, client_id: str, label: str) -> None:
         """Register or refresh a client from a poll request."""

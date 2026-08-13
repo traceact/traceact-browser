@@ -54,9 +54,17 @@ Every record carries the site as its `project` (`127.0.0.1:3000` and `127.0.0.1:
 Agents don't have to read the whole stream. The relay answers scoped questions about a tracked tab, live:
 
 ```bash
-curl 'http://127.0.0.1:8631/snapshot?selector=%23notice-area'   # just that subtree
-curl 'http://127.0.0.1:8631/snapshot?selector=.modal&exists=1'  # only a match count
-curl 'http://127.0.0.1:8631/snapshot'                           # the whole DOM, capped
+curl 'http://127.0.0.1:8631/snapshot?project=127.0.0.1:8765&selector=%23results'  # this app's tab
+curl 'http://127.0.0.1:8631/snapshot?selector=.modal&exists=1'                    # only a match count
+curl 'http://127.0.0.1:8631/snapshot'                                             # the whole DOM, capped
+```
+
+An app addresses its own tab by the one thing it already knows, its `host:port`, from the shell or from Python:
+
+```python
+from traceact_browser import snapshot, focus
+snapshot("127.0.0.1:8765", selector="#results")
+focus("127.0.0.1:8765")  # front my tab
 ```
 
 Snapshots come back with scripts stripped and form values redacted.

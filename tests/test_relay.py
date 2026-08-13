@@ -219,6 +219,93 @@ def test_demo_page_serves_with_no_store(relay):
     assert b"traceact-browser demo" in resp.read()
 
 
+# ---- project-scoped addressing ----
+
+def test_snapshot_by_unknown_project_is_404_with_known_list(relay):
+    _post(relay, "/ingest", json.dumps({"records": [_record()]}).encode())
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(_url(relay, "/snapshot?project=nope:1"))
+    assert err.value.code == 404
+    body = json.loads(err.value.read())
+    assert "127.0.0.1:3000" in body["projects"]
+
+
+def test_snapshot_by_project_resolves_tab_and_client(relay):
+    _post(relay, "/ingest", json.dumps({"records": [
+        _record(trace_id="trc_aaaaaaaaaaa1",
+                meta={"tab_id": 7, "window_id": 2, "client_id": "cli_x"}),
+        _record(trace_id="trc_aaaaaaaaaaa2", project="other:1",
+                meta={"tab_id": 99, "window_id": 3, "client_id": "cli_x"}),
+    ]}).encode())
+
+    def fake_extension():
+        resp = urllib.request.urlopen(_url(relay, "/pull?client=cli_x&label=Chrome&wait=10"))
+        cmd = json.loads(resp.read())["commands"][0]
+        assert cmd["type"] == "snapshot" and cmd["tab_id"] == 7
+        _post(relay, "/result", json.dumps(
+            {"id": cmd["id"], "ok": True, "matches": 2}).encode())
+
+    urllib.request.urlopen(_url(relay, "/pull?client=cli_x&label=Chrome&wait=0"))
+    ext = threading.Thread(target=fake_extension)
+    ext.start()
+    time.sleep(0.2)
+    resp = urllib.request.urlopen(
+        _url(relay, "/snapshot?project=127.0.0.1%3A3000&exists=1"))
+    ext.join()
+    assert json.loads(resp.read())["matches"] == 2
+
+
+def test_focus_by_project_body(relay):
+    _post(relay, "/ingest", json.dumps({"records": [
+        _record(meta={"tab_id": 41, "window_id": 5, "client_id": "cli_x"}),
+    ]}).encode())
+
+    def fake_extension():
+        resp = urllib.request.urlopen(_url(relay, "/pull?client=cli_x&label=Chrome&wait=10"))
+        cmd = json.loads(resp.read())["commands"][0]
+        assert cmd["type"] == "focus" and cmd["tab_id"] == 41 and cmd["window_id"] == 5
+        _post(relay, "/result", json.dumps({"id": cmd["id"], "ok": True}).encode())
+
+    urllib.request.urlopen(_url(relay, "/pull?client=cli_x&label=Chrome&wait=0"))
+    ext = threading.Thread(target=fake_extension)
+    ext.start()
+    time.sleep(0.2)
+    resp = _post(relay, "/focus", json.dumps({"project": "127.0.0.1:3000"}).encode())
+    ext.join()
+    assert resp.status == 200
+
+
+def test_focus_by_unknown_project_is_404(relay):
+    assert _post_status(relay, "/focus", b'{"project": "ghost:9"}') == 404
+
+
+def test_newest_record_wins_the_project_target(relay):
+    _post(relay, "/ingest", json.dumps({"records": [
+        _record(trace_id="trc_aaaaaaaaaaa1", meta={"tab_id": 1, "client_id": "cli_x"}),
+    ]}).encode())
+    _post(relay, "/ingest", json.dumps({"records": [
+        _record(trace_id="trc_aaaaaaaaaaa2", meta={"tab_id": 2, "client_id": "cli_x"}),
+    ]}).encode())
+    assert relay.hub.project_target("127.0.0.1:3000")["tab_id"] == 2
+
+
+def test_health_reports_projects(relay):
+    _post(relay, "/ingest", json.dumps({"records": [_record()]}).encode())
+    health = json.loads(urllib.request.urlopen(_url(relay, "/health")).read())
+    assert "127.0.0.1:3000" in health["projects"]
+
+
+def test_client_module_snapshot_and_focus_paths(relay):
+    from traceact_browser import client
+    base = f"http://127.0.0.1:{relay.port}"
+    out = client.snapshot("ghost:9", selector="#x", base_url=base)
+    assert "error" in out
+    out = client.focus("ghost:9", base_url=base)
+    assert "error" in out
+    out = client.health(base_url=base)
+    assert out["app"] == "traceact-browser"
+
+
 # ---- the schema round-trip: our records through traceact itself ----
 
 def test_records_read_back_through_tracelog(relay, tmp_path):

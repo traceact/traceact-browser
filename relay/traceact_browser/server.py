@@ -235,6 +235,7 @@ and errors on purpose so you can watch traces arrive.</p>
                 "port": relay.port,
                 "data_file": str(relay.store.path),
                 "clients": relay.hub.clients(),
+                "projects": relay.hub.projects(),
             })
 
         def _get_pull(self, query: Dict[str, List[str]]) -> None:
@@ -270,6 +271,7 @@ and errors on purpose so you can watch traces arrive.</p>
                 self._send_json(400, {"error": "expected {records: [objects with trace_id]}"})
                 return
             written = relay.store.append(records)
+            relay.hub.note_records(records)
             self._send_json(200, {"ok": True, "written": written})
 
         def _post_result(self) -> None:
@@ -299,7 +301,19 @@ and errors on purpose so you can watch traces arrive.</p>
             if not isinstance(record, dict):
                 self._send_json(400, {"error": "expected a trace record object"})
                 return
+            # Two accepted shapes: a full trace record (what the viewer's
+            # Focus button sends), or {"project": "host:port"} from an app
+            # that only knows its own address.
             meta = record.get("meta") or {}
+            if not meta.get("tab_id") and record.get("project"):
+                target = relay.hub.project_target(record["project"])
+                if target is None:
+                    self._send_json(404, {
+                        "error": f"no tab seen for project {record['project']!r} yet",
+                        "projects": relay.hub.projects(),
+                    })
+                    return
+                meta = {**target}
             client_id = relay.hub.resolve_client(meta.get("client_id"))
             if client_id is None:
                 self._send_json(503, {
@@ -321,14 +335,28 @@ and errors on purpose so you can watch traces arrive.</p>
                 self._send_json(502, {"error": result.get("error", "focus failed")})
 
         def _get_snapshot(self, query: Dict[str, List[str]]) -> None:
-            client_id = relay.hub.resolve_client((query.get("client") or [""])[0] or None)
+            requested_client = (query.get("client") or [""])[0] or None
+            tab_raw = (query.get("tab") or [""])[0] or None
+            project = (query.get("project") or [""])[0] or None
+            # ?project= resolves both the tab and the owning browser from
+            # the most recent record that project produced.
+            if project is not None and tab_raw is None:
+                target = relay.hub.project_target(project)
+                if target is None:
+                    self._send_json(404, {
+                        "error": f"no tab seen for project {project!r} yet",
+                        "projects": relay.hub.projects(),
+                    })
+                    return
+                tab_raw = str(target["tab_id"])
+                requested_client = requested_client or target.get("client_id")
+            client_id = relay.hub.resolve_client(requested_client)
             if client_id is None:
                 self._send_json(503, {
                     "error": "no browser connected, or several — pass ?client=",
                     "clients": relay.hub.clients(),
                 })
                 return
-            tab_raw = (query.get("tab") or [""])[0] or None
             tab_id: Optional[int] = None
             if tab_raw is not None:
                 try:

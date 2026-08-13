@@ -141,7 +141,9 @@ async function webRequestRecord(details, error) {
     method: details.method, reqUrl: details.url,
     status: details.statusCode, error,
     t0, t1: details.timeStamp,
-    url: tab.url, pageLoadId: null
+    // For the page load itself, tab.url can still be blank; the request's
+    // own URL is what names the project correctly.
+    url: tab.url || details.url, pageLoadId: null
   };
   enqueue(buildRecord(event, tab, identity, settings));
 }

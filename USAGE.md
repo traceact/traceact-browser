@@ -95,10 +95,23 @@ The relay exposes `GET /snapshot`, answered live by the extension from the track
 
 | Parameter | Meaning |
 |---|---|
+| `project` | address the tab by the app's own `host:port` — the relay targets the tab most recently seen producing traces for it, in whichever browser |
 | `selector` | return only the matching subtree(s), up to 5 matches, with a match count |
 | `exists=1` | return only the match count, no HTML |
 | `tab` | a `tab_id` from any trace record's `meta`; defaults to the active tab |
 | `client` | which browser instance, when more than one is connected (`client_id` from `meta`, or see `/health`) |
+
+`project` is the parameter apps and agents should reach for first: an app already knows its own address, so no ids need discovering. From Python, the installed package wraps this:
+
+```python
+from traceact_browser import snapshot, focus
+
+snapshot("127.0.0.1:8765", selector="#results")   # the app's own host:port
+snapshot("127.0.0.1:8765", selector=".modal", exists=True)
+focus("127.0.0.1:8765")                           # front the app's tab
+```
+
+`/health` lists every `project` the relay has seen and how long ago, so an agent can check its app is being tracked before asking for snapshots.
 
 ```bash
 curl 'http://127.0.0.1:8631/snapshot?selector=%23checkout&exists=1'
@@ -114,6 +127,8 @@ traceact view ~/.traceact-browser/traces.jsonl --focus-hook http://127.0.0.1:863
 ```
 
 Each trace row in the viewer gains a **Focus** button. Clicking one sends the record to the relay, which tells the owning browser to front that window and tab. With Chrome and Brave both connected, the record's `client_id` routes the request to the right one.
+
+`POST /focus` also accepts the minimal body `{"project": "host:port"}`, fronting the tab most recently seen for that app — the same addressing the snapshot endpoint and the Python `focus()` helper use.
 
 ## Several browsers, windows, and agents at once
 
@@ -146,6 +161,11 @@ Applied in the extension, before anything reaches the relay or disk, in every mo
 | `traceact-browser --version` | prints the version |
 
 The relay binds `127.0.0.1` only, on port 8631 by default, trying the next 19 ports when it's taken; the extension probes the same range, so they find each other without configuration. The popup shows a **Start the relay** button when the relay is down — it works once `register-native-host` has run (the launcher runs it), and otherwise shows the start command with a copy button.
+
+## What isn't captured
+
+- **Other extensions' own pages** (`chrome-extension://` popups, options, editors). Chrome doesn't let one extension inject into another's pages or observe another extension's requests, so these can't be tracked from outside. An extension that wants its activity in the trace file can write it itself: the relay accepts `POST /ingest` from any extension origin, so posting traceact-shaped records (any `project` string you choose) puts them in the same file and viewer.
+- **Fetches made from web workers** — the page-context wrap doesn't reach workers; requests the page's own code didn't make (scripts, images, frames) still arrive as metadata via webRequest.
 
 ## Troubleshooting
 
