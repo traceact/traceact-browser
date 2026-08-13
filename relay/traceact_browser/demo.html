@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>traceact-browser demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 72rem; margin: 2rem auto;
+         line-height: 1.5; padding: 0 1rem; }
+  /* Two panes: controls on the left, the live log on the right, so a click
+     and its effect are visible at the same time. Stacks on narrow screens. */
+  .panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+           gap: 2rem; align-items: start; }
+  .log-pane { position: sticky; top: 1rem; }
+  @media (max-width: 720px) {
+    .panes { grid-template-columns: 1fr; }
+    .log-pane { position: static; }
+  }
+  button { font: inherit; padding: 0.4rem 0.9rem; margin: 0.2rem 0.3rem 0.2rem 0;
+           border: 1px solid #999; border-radius: 6px; background: #f5f5f5; cursor: pointer; }
+  button:hover { background: #e8e8e8; }
+  input { font: inherit; padding: 0.4rem; border: 1px solid #999; border-radius: 6px; }
+  #log { background: #f0f0f0; border-radius: 6px; padding: 0.8rem; min-height: 2rem;
+         max-height: 70vh; overflow-y: auto;
+         font-family: ui-monospace, monospace; font-size: 0.85rem; white-space: pre-wrap; }
+  .log-row { display: flex; gap: 0.6rem; align-items: baseline; }
+  .log-row .ts { color: #888; flex-shrink: 0; }
+  .log-row .caret { color: #2e7d32; font-weight: bold; flex-shrink: 0; }
+  section { margin: 0 0 1.5rem; }
+  h2 { margin-top: 0; }
+</style>
+</head>
+<body>
+<h1>traceact-browser demo</h1>
+<p>This page makes noise on purpose: it logs, fetches, errors, and changes its
+own DOM, so you can watch every one of those show up as a trace. It ran a small
+sequence the moment it loaded — check the viewer, then press buttons for more.</p>
+
+<div class="panes">
+<div class="controls-pane">
+<section>
+  <h2>Console and errors</h2>
+  <button id="btn-log">console.log</button>
+  <button id="btn-warn">console.warn</button>
+  <button id="btn-error">console.error</button>
+  <button id="btn-throw">Uncaught throw</button>
+  <button id="btn-reject">Unhandled rejection</button>
+</section>
+
+<section>
+  <h2>Network</h2>
+  <button id="btn-fetch-ok">fetch that succeeds</button>
+  <button id="btn-fetch-404">fetch that 404s</button>
+</section>
+
+<section>
+  <h2>Interactions and DOM</h2>
+  <form id="demo-form">
+    <input id="demo-input" name="secret_demo_field" placeholder="type here (value is redacted)">
+    <button type="submit">Submit form</button>
+  </form>
+  <button id="btn-spa">SPA navigation (pushState)</button>
+  <button id="btn-dom">Add a DOM node</button>
+</section>
+</div>
+
+<div class="log-pane">
+<section>
+  <h2>What this page did</h2>
+  <div id="log">waiting…</div>
+</section>
+</div>
+</div>
+
+<script>
+  const log = (line) => {
+    const el = document.getElementById('log');
+    if (!el.dataset.started) { el.textContent = ''; el.dataset.started = '1'; }
+    const now = new Date();
+    const ts = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+    const row = document.createElement('div');
+    row.className = 'log-row';
+    for (const [cls, text] of [['ts', ts], ['caret', '>'], ['msg', line]]) {
+      const span = document.createElement('span');
+      span.className = cls;
+      span.textContent = text;
+      row.appendChild(span);
+    }
+    el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+  };
+  const on = (id, fn) => document.getElementById(id).addEventListener('click', fn);
+
+  on('btn-log',   () => { console.log('demo: a plain log line', {answer: 42}); log('logged'); });
+  on('btn-warn',  () => { console.warn('demo: a warning'); log('warned'); });
+  on('btn-error', () => { console.error('demo: an error-level log'); log('errored (log level)'); });
+  on('btn-throw', () => { log('throwing error…'); setTimeout(() => { throw new Error('demo: uncaught'); }, 0); });
+  on('btn-reject', () => { log('rejecting promise…'); Promise.reject(new Error('demo: unhandled rejection')); });
+
+  on('btn-fetch-ok',  async () => { const r = await fetch('/demo/api/ok'); log('fetched ok: ' + r.status); });
+  on('btn-fetch-404', async () => { const r = await fetch('/demo/api/missing'); log('fetched missing: ' + r.status); });
+
+  document.getElementById('demo-form').addEventListener('submit', (e) => {
+    e.preventDefault(); log('form submitted');
+  });
+  on('btn-spa', () => { history.pushState({}, '', '#/demo-route-' + Date.now()); log('pushed a route'); });
+  on('btn-dom', () => {
+    const p = document.createElement('p'); p.textContent = 'a freshly added node';
+    document.querySelector('.controls-pane').appendChild(p); log('added a node');
+  });
+
+  // The zero-click sequence: proof of capture with nothing pressed.
+  window.addEventListener('load', async () => {
+    console.log('demo: page loaded, running the opening sequence');
+    try { await fetch('/demo/api/ok'); } catch (e) {}
+    try { await fetch('/demo/api/missing'); } catch (e) {}
+    console.warn('demo: opening sequence done');
+    log('opening sequence: log, fetch ok, fetch 404, warn');
+  });
+</script>
+</body>
+</html>

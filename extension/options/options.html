@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>traceact-browser settings</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto;
+         line-height: 1.5; padding: 0 1rem; font-size: 14px; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 1.6em; }
+  label { display: block; margin: 0.6em 0; }
+  input[type=text], input[type=number] { font: inherit; padding: 6px; border: 1px solid #999;
+         border-radius: 6px; }
+  button { font: inherit; padding: 5px 12px; border: 1px solid #999; border-radius: 6px;
+           background: #f5f5f5; cursor: pointer; }
+  ul { padding-left: 0; list-style: none; }
+  li { display: flex; align-items: center; gap: 8px; margin: 4px 0;
+       font-family: ui-monospace, monospace; }
+  .muted { color: #555; font-size: 13px; }
+  .saved { color: #2e7d32; font-size: 13px; visibility: hidden; }
+</style>
+</head>
+<body>
+<h1>traceact-browser settings</h1>
+<p>What to capture, from which sites, and how much to redact. Every change
+saves the moment you make it. <span id="saved" class="saved">Saved.</span></p>
+
+<h2>Which sites get tracked</h2>
+<p class="muted">Type a domain the way you'd say it: <code>myapp.com</code> or
+<code>127.0.0.1:3000</code>. No https:// needed. A bare domain covers its
+subdomains and every port; adding a port pins it to that one app.</p>
+<ul id="allowlist"></ul>
+<form id="add-form">
+  <input type="text" id="add-input" placeholder="domain.com or 127.0.0.1:3000">
+  <button type="submit">Add</button>
+</form>
+<label><input type="checkbox" id="capture-all">
+  Capture all sites, ignoring the list above (the permissive mode)</label>
+<label><input type="checkbox" id="enabled"> Capture is on</label>
+
+<h2>Redaction</h2>
+<label><input type="checkbox" id="redact-inputs">
+  Record only the length of what's typed into fields, never the text itself</label>
+<label>Request and response bodies:
+  <select id="bodies">
+    <option value="localhost">localhost apps only (default)</option>
+    <option value="never">never</option>
+    <option value="always">every tracked site</option>
+  </select>
+</label>
+<p class="muted">Credential-shaped values (tokens, keys, JWTs, password fields)
+are masked before anything reaches disk, in every mode.</p>
+
+<h2>This browser</h2>
+<label>Label shown in traces (tells Chrome and Brave apart):
+  <input type="text" id="label" placeholder="auto-detected"></label>
+<label>Relay port (0 finds it automatically):
+  <input type="number" id="relay-port" min="0" max="65535"></label>
+
+<p><button id="reset">Reset everything to defaults</button></p>
+<script src="options.js" type="module"></script>
+</body>
+</html>

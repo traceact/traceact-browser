@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Relay tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./relay traceact pytest pytest-randomly
+      - name: Test
+        run: python -m pytest tests -q
+
+  javascript:
+    name: Extension unit tests (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Syntax-check every extension file
+        run: |
+          for f in extension/lib.js extension/background.js extension/page.js \
+                   extension/content.js extension/popup/popup.js extension/options/options.js; do
+            node --check "$f"
+          done
+      - name: Test
+        run: node --test tests/js/*.test.mjs
+
+  mypy:
+    name: Type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./relay mypy
+      - name: mypy
+        run: python -m mypy relay/traceact_browser
