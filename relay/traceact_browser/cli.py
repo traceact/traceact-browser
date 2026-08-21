@@ -6,11 +6,13 @@ button by telling Chrome and Brave where the relay's helper lives.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 from traceact_browser.server import DEFAULT_PORT, RelayServer, find_running_relay
+from traceact_browser.store import DEFAULT_MAX_BYTES
 
 DEFAULT_DATA_DIR = Path.home() / ".traceact-browser"
 DEFAULT_DATA_FILE = DEFAULT_DATA_DIR / "traces.jsonl"
@@ -28,7 +30,7 @@ _HOST_DIRS = [
 ]
 
 
-def serve(data_file: Path, port: int) -> int:
+def serve(data_file: Path, port: int, max_bytes: int = DEFAULT_MAX_BYTES) -> int:
     """Start the relay, or report the one already running on the port range."""
     running = find_running_relay(port)
     if running is not None:
@@ -36,7 +38,7 @@ def serve(data_file: Path, port: int) -> int:
         print(f"traceact-browser relay already running on http://127.0.0.1:{found_port}")
         print(f"Trace file: {health.get('data_file')}")
         return 0
-    relay = RelayServer(data_file, port=port)
+    relay = RelayServer(data_file, port=port, max_bytes=max_bytes)
     bound = relay.bind()
     print(f"traceact-browser relay on http://127.0.0.1:{bound}")
     print(f"Trace file: {data_file}")
@@ -46,6 +48,31 @@ def serve(data_file: Path, port: int) -> int:
         relay.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+    return 0
+
+
+def clear(data_file: Path) -> int:
+    """Delete the trace file and its rotated generation.
+
+    The trace file holds captured browser data; this wipes it. Removes the
+    current file and its `.1` rotation; leaves everything else in the data
+    directory untouched.
+    """
+    removed = []
+    for target in (data_file, data_file.with_name(data_file.name + ".1")):
+        try:
+            target.unlink()
+            removed.append(target)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"Could not remove {target}: {exc}")
+            return 1
+    if removed:
+        for target in removed:
+            print(f"Removed {target}")
+    else:
+        print(f"Nothing to remove; no trace file at {data_file}")
     return 0
 
 
@@ -60,13 +87,17 @@ def register_native_host(quiet: bool = False) -> int:
     import json
 
     DEFAULT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(DEFAULT_DATA_DIR, 0o700)  # owner-only, matches the trace store
+    except OSError:
+        pass
     wrapper = DEFAULT_DATA_DIR / "native-host.sh"
     wrapper.write_text(
         "#!/bin/sh\n"
         f'exec "{sys.executable}" -m traceact_browser.native_host\n',
         encoding="utf-8",
     )
-    wrapper.chmod(0o755)
+    wrapper.chmod(0o700)  # owner-only; Chrome runs it as this user
 
     manifest = {
         "name": NATIVE_HOST_NAME,
@@ -107,15 +138,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                          help=f"Trace file to append to (default {DEFAULT_DATA_FILE}).")
     serve_p.add_argument("--port", type=int, default=DEFAULT_PORT,
                          help=f"First port to try (default {DEFAULT_PORT}).")
+    serve_p.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES,
+                         help=f"Rotate the trace file past this size "
+                              f"(default {DEFAULT_MAX_BYTES // (1024 * 1024)} MB; 0 disables).")
 
     sub.add_parser("register-native-host",
                    help="Let the extension's Restart button start the relay.")
 
+    clear_p = sub.add_parser("clear", help="Delete the trace file and its rotation.")
+    clear_p.add_argument("--file", type=Path, default=DEFAULT_DATA_FILE,
+                         help=f"Trace file to remove (default {DEFAULT_DATA_FILE}).")
+
     args = parser.parse_args(argv)
     if args.command == "register-native-host":
         return register_native_host()
+    if args.command == "clear":
+        return clear(args.file)
     if args.command == "serve":
-        return serve(args.file, args.port)
+        return serve(args.file, args.port, args.max_bytes)
     return serve(DEFAULT_DATA_FILE, DEFAULT_PORT)
 
 

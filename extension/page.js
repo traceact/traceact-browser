@@ -19,7 +19,26 @@
   let pending = [];
   let dropped = 0;
 
+  // `tracked` gates whether anything is emitted over the postMessage bridge.
+  // It starts undecided; content.js asks the background and posts the answer.
+  // The background is the authoritative gate regardless — this only avoids
+  // doing capture work and broadcasting on pages that would be dropped. Fail
+  // open after a short wait so a lost signal degrades to prior behaviour
+  // (emit, and let the background drop it) rather than silently losing a
+  // tracked page's traces.
+  let tracked = null;
+  addEventListener('message', (e) => {
+    if (e.source !== window) return;
+    const d = e.data;
+    if (d && d.__tabControl === MARKER && typeof d.tracked === 'boolean') {
+      tracked = d.tracked;
+      if (!tracked) pending = [];  // untracked: drop the backlog, emit nothing
+    }
+  });
+  setTimeout(() => { if (tracked === null) tracked = true; }, 1500);
+
   const push = (event) => {
+    if (tracked === false) return;  // decided untracked: capture nothing further
     if (pending.length >= MAX_PENDING) { dropped++; return; }
     event.pageLoadId = pageLoadId;
     event.url = location.href;
@@ -28,6 +47,7 @@
   };
 
   const flush = () => {
+    if (tracked !== true) return;  // hold while undecided; never emit if untracked
     if (!pending.length) return;
     if (dropped) {
       pending.push({ type: 'console', level: 'warn', t: Date.now(),
@@ -214,9 +234,15 @@
     if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
     clearTimeout(inputTimers.get(el));
     inputTimers.set(el, setTimeout(() => {
+      // Passwords are blanked here, at the source, so the value never crosses
+      // the postMessage bridge even briefly. The field descriptor rides along
+      // so the background worker can redact the wider sensitive set (card,
+      // one-time-code, credential-named fields) with its tested logic.
       const value = el.type === 'password' ? '' : String(el.value);
       push({ type: 'dom.input', selector: selectorFor(el),
-             valueLength: el.value.length, value });
+             valueLength: el.value.length, value,
+             field: { type: el.type || '', name: el.name || '', id: el.id || '',
+                      autocomplete: el.getAttribute('autocomplete') || '' } });
     }, 600));
   }, true);
 

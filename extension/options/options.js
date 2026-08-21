@@ -105,3 +105,40 @@ chrome.storage.local.get('settings').then((stored) => {
   settings = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
   renderAll();
 });
+
+// ---- trace file location and clearing ----
+
+const sendToBackground = (message) =>
+  new Promise((resolve) => chrome.runtime.sendMessage({ type: 'popup', ...message }, resolve));
+
+async function refreshTracePath() {
+  const status = await sendToBackground({ op: 'status' });
+  const path = status?.relay?.ok ? status.relay.dataFile : null;
+  el('trace-path').textContent = path || 'relay not running — start it, then reopen this page';
+  el('copy-path').disabled = !path;
+  el('copy-path').onclick = () => {
+    if (!path) return;
+    navigator.clipboard.writeText(path);
+    el('copy-path').textContent = 'Copied';
+    setTimeout(() => { el('copy-path').textContent = 'Copy path'; }, 1200);
+  };
+}
+
+let clearArmed = false;
+el('clear-traces').onclick = async () => {
+  if (!clearArmed) {
+    clearArmed = true;
+    el('clear-traces').textContent = 'Click again to confirm';
+    el('clear-status').textContent = 'This deletes the trace file.';
+    return;
+  }
+  el('clear-traces').disabled = true;
+  const reply = await sendToBackground({ op: 'clear-traces' });
+  el('clear-traces').disabled = false;
+  clearArmed = false;
+  el('clear-traces').textContent = 'Clear all traces';
+  el('clear-status').textContent = reply?.ok ? 'Cleared.' : `Couldn't clear (${reply?.error || 'relay down'}).`;
+  setTimeout(() => { el('clear-status').textContent = ''; }, 2500);
+};
+
+refreshTracePath();

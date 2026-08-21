@@ -6,6 +6,18 @@
   'use strict';
   const MARKER = 'traceact-browser:v1';
 
+  // Ask the background whether this tab is tracked and relay the answer to
+  // page.js (MAIN world), so an untracked page never emits over the bridge.
+  // If the background can't answer, page.js fails open on its own timeout.
+  try {
+    chrome.runtime.sendMessage({ type: 'is-tracked' }, (reply) => {
+      if (chrome.runtime.lastError || !reply) return;
+      window.postMessage({ __tabControl: MARKER, tracked: !!reply.tracked }, location.origin);
+    });
+  } catch {
+    // Extension context gone; page.js will fail open.
+  }
+
   addEventListener('message', (e) => {
     if (e.source !== window) return;
     const data = e.data;

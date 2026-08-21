@@ -143,24 +143,31 @@ Each trace row in the viewer gains a **Focus** button. Clicking one sends the re
 
 ## Redaction
 
-Applied in the extension, before anything reaches the relay or disk, in every mode:
+Redaction is applied in the extension, before anything reaches the relay or disk, in every mode. It is **best-effort pattern matching, not a guarantee** — it masks values that are named or shaped like credentials, and it does not recognise arbitrary sensitive data (PII, health, or financial values in a response body aren't credentials and pass through). The honest rule: don't track a site whose response bodies you wouldn't paste into a local file.
 
-- Query-string values whose parameter name looks credential-shaped (`token`, `key`, `secret`, `password`, `auth`, `session`, `signature`, `code`, …) are masked in every captured URL. The rest of the URL passes through byte for byte.
-- JWTs and `Bearer` tokens are masked inside strings wherever they appear.
-- Object keys named like credentials are masked at any depth in console arguments and bodies.
-- Password fields are never captured. Other typed input is recorded as a length unless the options page says otherwise.
-- Request headers aren't captured at all.
+What is masked:
+
+- **Query-string values** whose parameter name looks credential-shaped (`token`, `key`, `secret`, `password`, `auth`, `session`, `signature`, `code`, …), in every captured URL. The rest of the URL passes through byte for byte.
+- **Value shapes** wherever they appear in a captured string, including a URL path (`/reset/<jwt>`): JWTs, `Bearer` tokens, OpenAI/Anthropic/Google/GitHub/Slack/Perplexity keys, AWS access-key ids, Stripe secret keys, Google OAuth tokens, and PEM private keys.
+- **Object keys named like a credential**, at any depth in console arguments and JSON bodies — matched word-aware, so `access_key` and `apiKey` mask while `monkey` and `keyboard` don't.
+- **Sensitive form fields**: passwords, card numbers, one-time codes, and credential-named fields are never captured; passwords are blanked at the source. Other typed input is recorded as a length unless the options page says otherwise.
+- **Request headers aren't captured at all**, so `Authorization` and `Cookie` never reach disk.
+
+The trace file and its directory are created owner-only (`0600` / `0700`). Wipe it any time with `traceact-browser clear`.
 
 ## The relay CLI
 
 | Command | What it does |
 |---|---|
 | `traceact-browser` | starts the relay (or reports the one already running) |
-| `traceact-browser serve --file PATH --port N` | choose the trace file and the first port to try |
+| `traceact-browser serve --file PATH --port N --max-bytes N` | choose the trace file, first port to try, and rotation cap |
+| `traceact-browser clear --file PATH` | delete the trace file and its rotated `.1` generation |
 | `traceact-browser register-native-host` | lets the popup's Start button launch the relay |
 | `traceact-browser --version` | prints the version |
 
-The relay binds `127.0.0.1` only, on port 8631 by default, trying the next 19 ports when it's taken; the extension probes the same range, so they find each other without configuration. The popup shows a **Start the relay** button when the relay is down — it works once `register-native-host` has run (the launcher runs it), and otherwise shows the start command with a copy button.
+The relay binds `127.0.0.1` only, on port 8631 by default, trying the next 19 ports when it's taken; the extension probes the same range, so they find each other without configuration. Every endpoint requires a loopback `Host` header (a DNS-rebinding defense), and the local-tool endpoints (`/focus`, `/snapshot`, `/health`) reject web-page `Origin`s, so a site you visit can't drive the relay. The popup shows a **Start the relay** button when the relay is down — it works once `register-native-host` has run (the launcher runs it), and otherwise shows the start command with a copy button.
+
+The trace file rotates to a single `.jsonl.1` generation once it passes 20 MB (change the cap with `serve --max-bytes`, or `--max-bytes 0` to disable), so it can't grow without bound.
 
 ## What isn't captured
 

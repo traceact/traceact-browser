@@ -7,10 +7,12 @@ Routes:
     GET  /pull        long-poll command channel for the extension
     POST /result      command results from the extension
     POST /focus       focus-hook target for `traceact view --focus-hook`
+    POST /clear       delete the trace file (and its rotation), for the UI button
     GET  /snapshot    DOM snapshot of a tracked tab, optionally selector-scoped
     GET  /demo        bundled demo page that traces itself
 """
 
+import html
 import json
 import socket
 import threading
@@ -21,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from traceact_browser.commands import CommandHub
-from traceact_browser.store import TraceStore
+from traceact_browser.store import DEFAULT_MAX_BYTES, TraceStore
 
 DEFAULT_PORT = 8631
 PORT_ATTEMPTS = 20
@@ -57,8 +59,9 @@ def find_running_relay(start_port: int = DEFAULT_PORT,
 class RelayServer:
     """Owns the HTTP server, the trace store, and the command hub."""
 
-    def __init__(self, data_file: Path, port: int = DEFAULT_PORT) -> None:
-        self.store = TraceStore(data_file)
+    def __init__(self, data_file: Path, port: int = DEFAULT_PORT,
+                 max_bytes: int = DEFAULT_MAX_BYTES) -> None:
+        self.store = TraceStore(data_file, max_bytes=max_bytes)
         self.hub = CommandHub()
         self.requested_port = port
         self.port: int = 0
@@ -150,16 +153,35 @@ def _make_handler(relay: RelayServer) -> type:
             return self.rfile.read(length)
 
         def _extension_origin_ok(self) -> bool:
-            """Only browser extensions (or origin-less local tools) may post.
+            """Only browser extensions (or origin-less local tools) may call.
 
             A web page's fetch to localhost carries an http(s) Origin; that
-            gets refused so an arbitrary site can't write into the trace file
-            or read commands.
+            gets refused so an arbitrary site can't write into the trace file,
+            read commands, or drive focus/snapshot. Local tools (the viewer's
+            focus hook, the Python client) send no Origin and pass.
             """
             origin = self.headers.get("Origin")
             if origin is None:
                 return True
             return origin.startswith("chrome-extension://") or origin.startswith("moz-extension://")
+
+        def _host_ok(self) -> bool:
+            """The Host header must name a loopback address.
+
+            This is the DNS-rebinding defense: a remote page that rebinds its
+            hostname to 127.0.0.1 becomes same-origin with the relay (so the
+            Origin check alone can't see it), but its requests still carry
+            `Host: attacker.example`, which this rejects. Legitimate callers
+            reach the relay as 127.0.0.1 or localhost, so their Host matches.
+            """
+            host = self.headers.get("Host", "")
+            if not host:
+                return False  # HTTP/1.1 requires Host; its absence is hostile
+            if host.startswith("["):  # bracketed IPv6, e.g. [::1]:8631
+                hostname = host[1:host.index("]")] if "]" in host else host[1:]
+            else:
+                hostname = host.split(":", 1)[0]
+            return hostname in ("127.0.0.1", "localhost", "::1")
 
         def _parse_json_body(self, raw: bytes) -> Any:
             """Parse the body, or answer 400 and return the failure sentinel.
@@ -176,6 +198,9 @@ def _make_handler(relay: RelayServer) -> type:
         # ---- routes ----
 
         def do_GET(self) -> None:
+            if not self._host_ok():
+                self._send_json(403, {"error": "loopback Host header required"})
+                return
             parsed = urlparse(self.path)
             route = parsed.path.rstrip("/") or "/"
             if route == "/":
@@ -196,6 +221,9 @@ def _make_handler(relay: RelayServer) -> type:
                 self._send_json(404, {"error": "unknown route"})
 
         def do_POST(self) -> None:
+            if not self._host_ok():
+                self._send_json(403, {"error": "loopback Host header required"})
+                return
             parsed = urlparse(self.path)
             route = parsed.path.rstrip("/")
             if route == "/ingest":
@@ -204,16 +232,21 @@ def _make_handler(relay: RelayServer) -> type:
                 self._post_result()
             elif route == "/focus":
                 self._post_focus()
+            elif route == "/clear":
+                self._post_clear()
             else:
                 self._send_json(404, {"error": "unknown route"})
 
         def _get_index(self) -> None:
+            # The browser label is user/client-supplied; escape it (and the
+            # path) so a label like "<script>…" can't script this page.
             clients = relay.hub.clients()
             rows = "".join(
-                f"<li><code>{c['label'] or c['client_id']}</code> "
-                f"(seen {c['seen_s_ago']}s ago)</li>"
+                f"<li><code>{html.escape(str(c['label'] or c['client_id']))}</code> "
+                f"(seen {html.escape(str(c['seen_s_ago']))}s ago)</li>"
                 for c in clients
             ) or "<li>none yet — load the extension and allow a site</li>"
+            path = html.escape(str(relay.store.path))
             self._send_html(200, f"""<!doctype html><meta charset="utf-8">
 <title>traceact-browser relay</title>
 <body style="font-family: system-ui; max-width: 42rem; margin: 3rem auto; line-height: 1.5">
@@ -221,14 +254,17 @@ def _make_handler(relay: RelayServer) -> type:
 <p>This is the local relay for the traceact-browser extension. It receives
 browser traces and appends them to one file on this machine. Nothing is
 sent anywhere else.</p>
-<p><b>Trace file:</b> <code>{relay.store.path}</code></p>
+<p><b>Trace file:</b> <code>{path}</code></p>
 <p><b>Connected browsers:</b></p><ul>{rows}</ul>
 <p><b>Try it:</b> open the <a href="/demo">demo page</a> — it logs, fetches,
 and errors on purpose so you can watch traces arrive.</p>
-<p>View traces: <code>traceact view {relay.store.path} --map</code></p>
+<p>View traces: <code>traceact view {path} --map</code></p>
 </body>""")
 
         def _get_health(self) -> None:
+            if not self._extension_origin_ok():
+                self._send_json(403, {"error": "extension or local-tool callers only"})
+                return
             self._send_json(200, {
                 "app": APP_NAME,
                 "version": _version(),
@@ -292,6 +328,9 @@ and errors on purpose so you can watch traces arrive.</p>
                             {"ok": known} if known else {"error": "unknown command id"})
 
         def _post_focus(self) -> None:
+            if not self._extension_origin_ok():
+                self._send_json(403, {"error": "extension or local-tool callers only"})
+                return
             raw = self._read_body()
             if raw is None:
                 return
@@ -334,7 +373,17 @@ and errors on purpose so you can watch traces arrive.</p>
             else:
                 self._send_json(502, {"error": result.get("error", "focus failed")})
 
+        def _post_clear(self) -> None:
+            if not self._extension_origin_ok():
+                self._send_json(403, {"error": "extension or local-tool callers only"})
+                return
+            removed = relay.store.clear()
+            self._send_json(200, {"ok": True, "removed": removed})
+
         def _get_snapshot(self, query: Dict[str, List[str]]) -> None:
+            if not self._extension_origin_ok():
+                self._send_json(403, {"error": "extension or local-tool callers only"})
+                return
             requested_client = (query.get("client") or [""])[0] or None
             tab_raw = (query.get("tab") or [""])[0] or None
             project = (query.get("project") or [""])[0] or None

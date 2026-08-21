@@ -45,7 +45,31 @@ async function render() {
   if (status.relay.ok) {
     relay.className = 'status';
     relay.innerHTML = `Relay running on port ${status.relay.port}.<br>` +
-      `<span class="muted">Traces: <code>${status.relay.dataFile || ''}</code></span>`;
+      `<span class="muted">Traces are saved to this file on your computer:</span><br>` +
+      `<code class="path">${status.relay.dataFile || ''}</code> ` +
+      `<button id="copy-path" class="mini">Copy path</button>`;
+    if (status.relay.dataFile) {
+      document.getElementById('copy-path').onclick = () => {
+        navigator.clipboard.writeText(status.relay.dataFile);
+        document.getElementById('copy-path').textContent = 'Copied';
+      };
+    }
+    // Clear button, with a two-step in-popup confirm (no browser dialog).
+    const clear = document.createElement('button');
+    clear.className = 'clearbtn';
+    clear.textContent = 'Clear all traces';
+    let armed = false;
+    clear.onclick = async () => {
+      if (!armed) { armed = true; clear.textContent = 'Click again to confirm'; return; }
+      clear.textContent = 'Clearing…';
+      clear.disabled = true;
+      const reply = await send({ op: 'clear-traces' });
+      clear.disabled = false;
+      armed = false;
+      clear.textContent = reply.ok ? 'Cleared' : 'Couldn\'t clear';
+      setTimeout(() => { clear.textContent = 'Clear all traces'; }, 1500);
+    };
+    relay.appendChild(clear);
   } else {
     relay.className = 'status bad';
     relay.innerHTML = 'Relay isn\'t running, so nothing is being saved.<br>';

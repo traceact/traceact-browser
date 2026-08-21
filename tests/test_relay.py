@@ -2,6 +2,8 @@
 traceact schema round-trip."""
 
 import json
+import os
+import socket
 import threading
 import time
 import urllib.error
@@ -39,6 +41,26 @@ def _post_status(relay, path, body: bytes, headers=None) -> int:
         return err.code
 
 
+def _raw_request(port, method, path, headers=None, body=b""):
+    """Send a request with exactly the headers given, so Host can be forged
+    the way a DNS-rebinding attacker's browser would."""
+    base = {"Host": f"127.0.0.1:{port}", "Connection": "close"}
+    base.update(headers or {})
+    if body:
+        base.setdefault("Content-Length", str(len(body)))
+    lines = [f"{method} {path} HTTP/1.1"] + [f"{k}: {v}" for k, v in base.items()]
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(raw)
+        resp = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            resp += chunk
+    return int(resp.split(b"\r\n", 1)[0].split()[1])
+
+
 def _record(**over):
     """A full traceact-shaped record, the same shape buildRecord emits."""
     rec = {
@@ -59,18 +81,82 @@ def _record(**over):
     return rec
 
 
+# ---- H1: DNS-rebinding and web-page CSRF defenses ----
+
+def test_foreign_host_header_rejected_on_every_route(relay):
+    """A non-loopback Host (what a DNS-rebound page sends) is refused
+    everywhere, before any handler logic runs."""
+    routes = [("GET", "/health"), ("GET", "/snapshot"), ("GET", "/pull?client=x"),
+              ("GET", "/"), ("GET", "/demo"),
+              ("POST", "/ingest"), ("POST", "/focus"), ("POST", "/result")]
+    for method, path in routes:
+        body = b'{"records":[]}' if method == "POST" else b""
+        code = _raw_request(relay.port, method, path,
+                            headers={"Host": "attacker.example"}, body=body)
+        assert code == 403, f"{method} {path} accepted a foreign Host"
+
+
+def test_loopback_host_variants_accepted(relay):
+    """The legitimate loopback names all pass the Host gate."""
+    for host in (f"127.0.0.1:{relay.port}", f"localhost:{relay.port}", "localhost"):
+        code = _raw_request(relay.port, "GET", "/health", headers={"Host": host})
+        assert code == 200, f"Host {host!r} was rejected"
+
+
+def test_missing_host_header_rejected(relay):
+    code = _raw_request(relay.port, "GET", "/health", headers={"Host": ""})
+    assert code == 403
+
+
+def test_web_page_origin_refused_on_focus_snapshot_health(relay):
+    """A site's http(s) Origin can't drive the local-tool endpoints, even
+    with a valid loopback Host (the plain-CSRF case, no rebinding)."""
+    for method, path, body in [("GET", "/health", b""),
+                               ("GET", "/snapshot", b""),
+                               ("POST", "/focus", b'{"project":"x:1"}')]:
+        code = _raw_request(relay.port, method, path,
+                            headers={"Origin": "https://evil.example.com",
+                                     "Content-Type": "application/json"},
+                            body=body)
+        assert code == 403, f"{method} {path} accepted a web-page Origin"
+
+
+def test_extension_origin_still_reaches_focus_and_snapshot(relay):
+    """A chrome-extension Origin passes the new gates (503/no-tab, not 403)."""
+    assert _raw_request(relay.port, "GET", "/health",
+                        headers={"Origin": "chrome-extension://abcdef"}) == 200
+    code = _raw_request(relay.port, "POST", "/focus",
+                        headers={"Origin": "chrome-extension://abcdef",
+                                 "Content-Type": "application/json"},
+                        body=json.dumps(_record()).encode())
+    assert code == 503  # reached the handler; no browser connected
+
+
+def test_local_tool_no_origin_still_reaches_health_and_focus(relay):
+    """The viewer's focus hook and Python client send no Origin — they pass."""
+    assert json.loads(urllib.request.urlopen(_url(relay, "/health")).read())["app"] \
+        == "traceact-browser"
+    assert _post_status(relay, "/focus", json.dumps(_record()).encode()) == 503
+
+
 # ---- hostile input ----
+
+def _store_is_empty(relay) -> bool:
+    """No records written. The file itself exists from store construction
+    (created owner-only up front), so emptiness is what a rejected write means."""
+    return relay.store.path.read_text() == ""
+
 
 def test_ingest_rejects_malformed_json(relay):
     assert _post_status(relay, "/ingest", b"{not json") == 400
-    assert relay.store.path.exists() is False
+    assert _store_is_empty(relay)
 
 
 def test_ingest_rejects_wrong_shapes(relay):
     for body in (b"[]", b'{"records": "no"}', b'{"records": [1, 2]}',
                  b'{"records": [{"no_trace_id": true}]}', b'"a string"', b"null"):
         assert _post_status(relay, "/ingest", body) == 400, body
-    assert relay.store.path.exists() is False
+    assert _store_is_empty(relay)
 
 
 def test_ingest_rejects_oversized_and_missing_length(relay):
@@ -135,6 +221,16 @@ def test_unknown_routes_404(relay):
         with pytest.raises(urllib.error.HTTPError) as err:
             urllib.request.urlopen(_url(relay, path))
         assert err.value.code == 404
+
+
+# ---- L1: the index page escapes the client-supplied label ----
+
+def test_index_escapes_malicious_browser_label(relay):
+    # A client registers with a script-tag label (labels come from /pull).
+    urllib.request.urlopen(_url(relay, "/pull?client=cli_x&label=%3Cscript%3Ealert(1)%3C/script%3E&wait=0"))
+    body = urllib.request.urlopen(_url(relay, "/")).read().decode("utf-8")
+    assert "<script>alert(1)</script>" not in body, "label rendered unescaped"
+    assert "&lt;script&gt;" in body, "label not present in escaped form"
 
 
 # ---- happy path ----
@@ -217,6 +313,114 @@ def test_demo_page_serves_with_no_store(relay):
     resp = urllib.request.urlopen(_url(relay, "/demo"))
     assert resp.headers["Cache-Control"] == "no-store"
     assert b"traceact-browser demo" in resp.read()
+
+
+# ---- M1: the trace file and its directory are owner-only ----
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_new_store_is_owner_only(tmp_path):
+    from traceact_browser.store import TraceStore
+    data = tmp_path / "nested" / "traces.jsonl"
+    store = TraceStore(data)
+    store.append([_record()])
+    assert (data.stat().st_mode & 0o777) == 0o600, "trace file is not 0600"
+    assert (data.parent.stat().st_mode & 0o777) == 0o700, "data dir is not 0700"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_existing_world_readable_file_is_tightened_on_init(tmp_path):
+    """A file left 0644 by an older release is locked down when the relay
+    next starts, so upgrading closes the exposure without a manual step."""
+    from traceact_browser.store import TraceStore
+    data = tmp_path / "traces.jsonl"
+    data.write_text('{"trace_id":"trc_old"}\n', encoding="utf-8")
+    os.chmod(data, 0o644)
+    os.chmod(tmp_path, 0o755)
+    TraceStore(data)  # construction alone must tighten both
+    assert (data.stat().st_mode & 0o777) == 0o600
+    assert (tmp_path.stat().st_mode & 0o777) == 0o700
+
+
+# ---- M2: bounded growth via rotation, and the clear command ----
+
+def test_store_rotates_past_the_cap_and_bounds_total(tmp_path):
+    from traceact_browser.store import TraceStore
+    data = tmp_path / "traces.jsonl"
+    store = TraceStore(data, max_bytes=400)  # tiny cap to trigger fast
+    rec = _record()
+    for _ in range(200):
+        store.append([rec])
+    prev = data.with_name("traces.jsonl.1")
+    assert prev.exists(), "no rotation happened past the cap"
+    # One generation only: each file stays within a batch of the cap.
+    assert data.stat().st_size < 400 * 3
+    assert prev.stat().st_size < 400 * 3
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_rotated_generation_is_also_owner_only(tmp_path):
+    from traceact_browser.store import TraceStore
+    data = tmp_path / "traces.jsonl"
+    store = TraceStore(data, max_bytes=300)
+    for _ in range(200):
+        store.append([_record()])
+    prev = data.with_name("traces.jsonl.1")
+    assert prev.exists()
+    assert (prev.stat().st_mode & 0o777) == 0o600, "rotated file leaked to 0644"
+    assert (data.stat().st_mode & 0o777) == 0o600, "fresh file after rotation not 0600"
+
+
+def test_second_rotation_overwrites_the_first_generation(tmp_path):
+    """Growth is bounded because .1 is a single slot, not an ever-growing pile."""
+    from traceact_browser.store import TraceStore
+    data = tmp_path / "traces.jsonl"
+    store = TraceStore(data, max_bytes=300)
+    for _ in range(600):
+        store.append([_record()])
+    # No .2, .3, … generations accumulate.
+    assert not data.with_name("traces.jsonl.2").exists()
+    assert not data.with_name("traces.jsonl.1.1").exists()
+
+
+def test_store_clear_empties_file_and_removes_rotation(tmp_path):
+    from traceact_browser.store import TraceStore
+    data = tmp_path / "traces.jsonl"
+    store = TraceStore(data, max_bytes=300)
+    for _ in range(200):
+        store.append([_record()])
+    assert data.with_name("traces.jsonl.1").exists()
+    removed = store.clear()
+    assert removed >= 1
+    assert data.exists() and data.read_text() == ""  # recreated empty
+    assert not data.with_name("traces.jsonl.1").exists()
+    # The recreated file is still owner-only.
+    if os.name == "posix":
+        assert (data.stat().st_mode & 0o777) == 0o600
+
+
+def test_clear_endpoint_wipes_and_is_origin_gated(relay):
+    relay.store.append([_record(), _record(trace_id="trc_222222222222")])
+    assert relay.store.path.read_text() != ""
+    # A web-page Origin is refused.
+    assert _raw_request(relay.port, "POST", "/clear",
+                        headers={"Origin": "https://evil.example.com"}) == 403
+    # A local-tool call (no Origin) clears it.
+    resp = _post(relay, "/clear", b"")
+    assert resp.status == 200
+    assert relay.store.path.read_text() == ""
+
+
+def test_clear_removes_current_and_rotated(tmp_path):
+    from traceact_browser.cli import clear
+    data = tmp_path / "traces.jsonl"
+    data.write_text("{}\n", encoding="utf-8")
+    prev = data.with_name("traces.jsonl.1")
+    prev.write_text("{}\n", encoding="utf-8")
+    assert clear(data) == 0
+    assert not data.exists()
+    assert not prev.exists()
+    # Clearing an already-clean path is not an error.
+    assert clear(data) == 0
 
 
 # ---- project-scoped addressing ----

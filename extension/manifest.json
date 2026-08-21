@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "traceact-browser",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Captures console output, page errors, network activity, and interactions from allowlisted sites, and writes them as traceact JSONL via a local relay. Nothing leaves your machine.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhPAcGGmozQZCqcQ5p7xSHFlmNIbS3p9oT3KHPtCwxsLPe+umQNxIPgoH0yusbarFsnmTnf3OEIzUSj/JrL8aC8smR+INi+HwvyVSWm6RfX+TyubpXeRcAhUXqECyVGubqvzsXrrJtdbmpw2w9VZli3VZmZwjxb67/6jbop/mjj90VhV1tMTj/uewnUjZwf89/Ns/ZvFBk4Csy6WODI0k+2VX10+pSpAQxwmJFgGePDPVzLHbz1ODhh9pJK58zwrHDdd3qn2/+xTjhOjsy5qR5+mPWORMYmsbRU3vcLdVNXyWIc2SlkuMW4LrhMYKw2OknXAT7wTBQlnJaTE9Rxhf+QIDAQAB",
   "permissions": ["storage", "tabs", "webRequest", "scripting", "alarms", "nativeMessaging"],

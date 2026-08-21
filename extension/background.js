@@ -106,6 +106,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({});
     return false;
   }
+  if (message?.type === 'is-tracked') {
+    // content.js asks so page.js can skip capture work on untracked pages.
+    // The gate here (onMessage above, and the flush) stays authoritative;
+    // this is only an optimization hint.
+    sendResponse({ tracked: urlIsTracked(sender.tab?.url || '', settings) });
+    return false;
+  }
   if (message?.type === 'popup') {
     handlePopup(message).then(sendResponse);
     return true; // async response
@@ -322,6 +329,16 @@ async function handlePopup(message) {
     await chrome.storage.local.set({ settings });
     refreshAllBadges();
     return { ok: true, allowlist: list };
+  }
+  if (message.op === 'clear-traces') {
+    if (!relayOk && !(await probeRelay())) return { ok: false, error: 'relay not running' };
+    try {
+      const resp = await fetch(`http://127.0.0.1:${relayPort}/clear`, { method: 'POST' });
+      return await resp.json();
+    } catch {
+      relayOk = false;
+      return { ok: false, error: 'relay not reachable' };
+    }
   }
   if (message.op === 'restart-relay') {
     return new Promise((resolve) => {

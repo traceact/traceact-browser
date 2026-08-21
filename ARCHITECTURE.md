@@ -69,11 +69,14 @@ One: `~/.traceact-browser/traces.jsonl` (path configurable via `serve --file`). 
 
 ## Security considerations
 
-- The relay binds `127.0.0.1` only and refuses web-page origins on write routes.
-- Redaction happens in the extension, so credentials are masked before they cross the extension/relay boundary: sensitive query parameters, JWT/Bearer patterns, credential-named keys, password fields.
-- Snapshots strip script contents and redact form values; untracked tabs refuse to snapshot.
+- The relay binds `127.0.0.1` only. Every route requires a loopback `Host` header (a DNS-rebinding defense: a rebound remote page becomes same-origin but still sends `Host: attacker.example`). Write routes (`/ingest`, `/pull`, `/result`) and the local-tool routes (`/focus`, `/snapshot`, `/health`) both reject browser `Origin`s, so a visited web page can neither write traces nor drive focus/snapshot.
+- Redaction happens in the extension, before anything crosses the extension/relay boundary. It is **best-effort pattern matching, not a guarantee**: credential-named keys (word-aware), value shapes (JWT/Bearer, provider/AWS/Stripe keys, PEM), sensitive query parameters and URL-path secrets, and sensitive form fields are masked; arbitrary sensitive data (PII, financial, health) in a captured body is not recognised and passes through. The threat model is "don't track a site whose bodies you wouldn't paste into a local file."
+- The trace file and its directory are owner-only (`0600` / `0700`), self-healed on relay start, so other local accounts can't read captured data. Growth is bounded by single-generation rotation; `traceact-browser clear` wipes it.
+- Capture is gated on a tracked signal from the background, so an untracked page does no capture work and never emits over the MAIN→ISOLATED bridge. The background's `urlIsTracked` gate remains authoritative — the signal is an optimization, and it fails open (emit, let the background drop) so a lost signal never silently loses a tracked page's traces.
+- The project key anchors to the trusted top-frame `tab.url` for page-sourced events, so a tracked page can't forge records for another app's `host:port`.
+- Snapshots strip script contents and redact form values; untracked tabs refuse to snapshot. The relay index page escapes the client-supplied browser label.
 - The extension's `key` field pins its id, so the native-messaging allowlist can't be claimed by a different unpacked extension.
-- `/focus` and `/snapshot` are reachable by any local process, same trust model as the trace file itself: the machine's user.
+- The relay's local-tool endpoints are reachable by any local process running as the user — the same trust model as the trace file itself. The extension holds `<all_urls>` + `webRequest` + `scripting`, so a compromised build would see all browsing; loading unpacked from source (what you read is what runs) is the mitigation.
 
 ## Development and testing
 
